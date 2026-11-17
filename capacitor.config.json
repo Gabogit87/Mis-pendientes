@@ -1,0 +1,11 @@
+{
+  "appId": "com.gabo.mispendientes",
+  "appName": "Mis Pendientes",
+  "webDir": "www",
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_notify",
+      "iconColor": "#2563EB"
+    }
+  }
+}

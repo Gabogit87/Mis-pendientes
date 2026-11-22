@@ -41,6 +41,7 @@ h1{font-size:22px;margin:0;letter-spacing:-.3px}
 .card.done .task{text-decoration:line-through;color:var(--mute)}
 .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
 .pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#f1f5f9;color:#334155}
+.pill.wa{background:#dcfce7;color:#128c7e}
 .pill.bad{background:#fee2e2;color:var(--bad)}.pill.warn{background:#fef3c7;color:#92400e}
 .pill.st-pendiente{background:#e0e7ff;color:#3730a3}.pill.st-proceso{background:#ede9fe;color:var(--proc)}.pill.st-listo{background:#dcfce7;color:#166534}
 .res{margin-top:7px;font-size:14px;background:#f8fafc;border-radius:8px;padding:6px 9px;color:#334155}
@@ -72,7 +73,7 @@ textarea{min-height:70px;resize:vertical}
 .tl ul{list-style:none;margin:12px 0 0;padding:0 0 0 14px;border-left:2px solid var(--line)}
 .tl li{position:relative;padding:0 0 12px 10px}
 .tl li:before{content:"";position:absolute;left:-21px;top:4px;width:10px;height:10px;border-radius:50%;background:#cbd5e1;border:2px solid #fff}
-.tl li.creado:before{background:var(--pri)}.tl li.seg:before{background:var(--warn)}.tl li.estado:before{background:var(--proc)}.tl li.resultado:before{background:var(--ok)}
+.tl li.creado:before{background:var(--pri)}.tl li.seg:before{background:var(--warn)}.tl li.estado:before{background:var(--proc)}.tl li.resultado:before{background:var(--ok)}.tl li.whatsapp:before{background:#25d366}
 .tl .when{font-size:12px;color:var(--mute)}
 .tl .what{font-size:14px}
 .addseg{display:flex;gap:6px;margin-top:4px}
@@ -100,7 +101,7 @@ var PREF = window.capacitorPreferences ? capacitorPreferences.Preferences : null
 var KEY = 'mis-pendientes-v1', KEYSET = 'mis-pendientes-ajustes';
 
 var items = [];
-var settings = {notif:true, resumen:'07:30', segDias:3, aviso:'08:00', avisoPrevio:'17:00'};
+var settings = {notif:true, segDias:3, aviso:'08:00', avisoPrevio:'17:00', recCada:2, recDesde:'08:00', recHasta:'17:00', recLaborables:true};
 var tab='pend', q='', form=null, sheetMode=null, permWarn='', toastT;
 
 /* ---------- utilidades ---------- */
@@ -118,7 +119,7 @@ function lastSeg(it){for(var i=it.historial.length-1;i>=0;i--){if(it.historial[i
 function segBase(it){return lastSeg(it)||it.creado}
 function stale(it,at){if(it.estado==='listo')return false;return ((at||Date.now())-segBase(it))>settings.segDias*864e5}
 var EST={pendiente:'Pendiente',proceso:'En proceso',listo:'Listo'};
-var TIPO={creado:'Creado',seg:'Seguimiento',estado:'Cambio de estado',resultado:'Cómo quedó'};
+var TIPO={creado:'Creado',seg:'Seguimiento',estado:'Cambio de estado',resultado:'Cómo quedó',whatsapp:'Mensaje de WhatsApp'};
 function dueInfo(it){
   if(!it.fecha) return {txt:'Sin fecha',cls:''};
   var n=diff(it.fecha);
@@ -165,9 +166,10 @@ function reschedule(){
     if(!settings.notif) return;
     var now=Date.now(), list=[], used={};
     function add(key,at,title,body,itemId){
-      if(!at||at.getTime()<now+20000) return;
+      if(!at||at.getTime()<now+20000) return false;
       var id=hashId(key); while(used[id])id++; used[id]=1;
       list.push({id:id,title:title,body:body,channelId:'pendientes',smallIcon:'ic_stat_notify',iconColor:'#2563EB',schedule:{at:at,allowWhileIdle:true},extra:{itemId:itemId||null}});
+      return true;
     }
     var open=items.filter(function(i){return i.estado!=='listo'});
     open.forEach(function(it){
@@ -184,21 +186,41 @@ function reschedule(){
       if(due.getHours()<8||due.getHours()>=19){ if(due.getHours()>=19)due.setDate(due.getDate()+1); due=atTime(due,'09:00'); }
       add(it.id+'|seg|'+segBase(it),due,'🔁 Sin seguimiento: '+who,'Llevas '+settings.segDias+' días sin moverlo: '+it.tarea,it.id);
     });
-    // resumen diario de los próximos 14 días
-    for(var k=0;k<14;k++){
+    // recordatorios cada X horas (próximos 21 días)
+    var step=Math.max(1,parseInt(settings.recCada,10)||2)*60;
+    var hm=function(x){var p=(x||'08:00').split(':');return (+p[0])*60+(+p[1])};
+    var from=hm(settings.recDesde), to=hm(settings.recHasta);
+    for(var k=0;k<21&&open.length;k++){
       var day=today();day.setDate(day.getDate()+k);
-      var at=atTime(day,settings.resumen), ds=iso(day);
-      var atr=0,hoy=0,sin=0;
-      open.forEach(function(it){
-        if(it.fecha&&it.fecha<ds)atr++; else if(it.fecha===ds)hoy++;
-        if(stale(it,at.getTime()))sin++;
-      });
-      if(atr+hoy+sin===0) continue;
-      var parts=[];if(atr)parts.push('🔴 '+atr+' atrasado'+(atr>1?'s':''));if(hoy)parts.push('🟠 '+hoy+' vence'+(hoy>1?'n':'')+' hoy');if(sin)parts.push('🔁 '+sin+' sin seguimiento');
-      add('resumen|'+ds,at,'📋 Tus pendientes de hoy',parts.join(' · ')+' — '+open.length+' abiertos en total',null);
+      if(settings.recLaborables&&(day.getDay()===0||day.getDay()===6)) continue;
+      var ds=iso(day);
+      for(var mm=from;mm<=to;mm+=step){
+        var at=new Date(day);at.setHours(Math.floor(mm/60),mm%60,0,0);
+        if(at.getTime()<now+20000) continue;
+        var atr=0,hoy=0,sin=0;
+        open.forEach(function(it){
+          if(it.fecha&&it.fecha<ds)atr++; else if(it.fecha===ds)hoy++;
+          if(stale(it,at.getTime()))sin++;
+        });
+        var parts=[];
+        if(atr)parts.push('🔴 '+atr+' atrasado'+(atr>1?'s':''));
+        if(hoy)parts.push('🟠 '+hoy+' vence'+(hoy>1?'n':'')+' hoy');
+        if(sin)parts.push('🔁 '+sin+' sin seguimiento');
+        parts.push(open.length+' abierto'+(open.length>1?'s':''));
+        var top=open.slice().sort(function(a,b){var x=a.fecha||'9999',y=b.fecha||'9999';return x<y?-1:x>y?1:0}).slice(0,4);
+        var lines=top.map(function(it){
+          var tag=!it.fecha?'':it.fecha<ds?' (atrasado)':it.fecha===ds?' (hoy)':' ('+fmt(it.fecha)+')';
+          return (it.cliente?it.cliente+': ':'')+it.tarea.split('\n')[0].slice(0,80)+tag;
+        });
+        if(add('rec|'+ds+'|'+mm,at,'⏰ Tus pendientes',parts.join(' · ')+'\nPróximo: '+lines[0],null)){
+          var last=list[list.length-1];
+          last.largeBody=parts.join(' · ')+'\n• '+lines.join('\n• ');
+          last.summaryText='Mis Pendientes';
+        }
+      }
     }
     list.sort(function(a,b){return a.schedule.at-b.schedule.at});
-    list=list.slice(0,300);
+    list=list.slice(0,400);
     if(list.length) return LN.schedule({notifications:list});
   }).catch(function(e){console.log('reschedule error',e)}).then(function(){
     schedBusy=false; if(schedAgain){schedAgain=false;reschedule();}
@@ -273,7 +295,7 @@ function render(){
     var d=dueInfo(it), done=it.estado==='listo', ls=lastSeg(it), st=stale(it);
     h+='<div class="card '+(done?'done':d.cls)+'"><button class="chk'+(done?' on':'')+'" data-chk="'+it.id+'" aria-label="Marcar listo">'+(done?CHECK:'')+'</button><div class="body" data-edit="'+it.id+'">';
     h+='<div class="cli">'+esc(it.cliente||'Sin cliente')+'</div><div class="task">'+esc(it.tarea)+'</div>';
-    h+='<div class="meta"><span class="pill '+d.cls+'">📅 '+esc(d.txt)+'</span><span class="pill st-'+it.estado+'">'+EST[it.estado]+'</span></div>';
+    h+='<div class="meta"><span class="pill '+d.cls+'">📅 '+esc(d.txt)+'</span><span class="pill st-'+it.estado+'">'+EST[it.estado]+'</span>'+(it.origen==='whatsapp'?'<span class="pill wa">📲 WhatsApp</span>':'')+'</div>';
     if(it.resultado) h+='<div class="res"><b>Cómo quedó:</b> '+esc(it.resultado)+'</div>';
     h+='<div class="age">⏱ Creado '+ago(it.creado)+' · <span class="'+(st?'late':'')+'">🔁 '+(ls?'Últ. seguimiento '+ago(ls):'Sin seguimiento')+'</span></div>';
     h+='</div></div>';
@@ -291,7 +313,8 @@ function clientes(){var s={};items.forEach(function(i){if(i.cliente)s[i.cliente]
 function sheetItem(){
   var f=form, t=today(), m=new Date(t);m.setDate(m.getDate()+1);
   var v=new Date(t);v.setDate(v.getDate()+((5-v.getDay()+7)%7||7));
-  var s='<div class="sheet"><h2>'+(f.id?'Editar pendiente':'Nuevo pendiente')+'</h2>';
+  var s='<div class="sheet"><h2>'+(f.id?'Editar pendiente':f._origen==='whatsapp'?'📲 Pendiente desde WhatsApp':'Nuevo pendiente')+'</h2>';
+  if(!f.id&&f._origen==='whatsapp') s+='<div class="note" style="margin:-6px 0 4px">Revisa el cliente y la fecha y dale a Guardar.</div>';
   s+='<label>Cliente</label><input id="f-cli" list="dl-cli" autocomplete="off" value="'+esc(f.cliente)+'" placeholder="Ej: Banco Amazonas"><datalist id="dl-cli">'+clientes().map(function(c){return '<option value="'+esc(c)+'">'}).join('')+'</datalist>';
   s+='<label>¿Qué debo hacer?</label><textarea id="f-tar" placeholder="Ej: Enviar propuesta técnica de laptops">'+esc(f.tarea)+'</textarea>';
   s+='<label>¿Cuándo debo entregar?</label><input id="f-fec" type="date" value="'+esc(f.fecha)+'">';
@@ -316,7 +339,10 @@ function sheetItem(){
 function sheetSettings(){
   var s='<div class="sheet"><h2>Ajustes</h2>';
   s+='<div class="set-row"><span>Notificaciones</span><input type="checkbox" id="s-notif" '+(settings.notif?'checked':'')+'></div>';
-  s+='<div class="set-row"><span>Resumen diario</span><input type="time" id="s-res" value="'+settings.resumen+'"></div>';
+  s+='<div class="set-row"><span>Recordarme cada (horas)</span><input type="number" min="1" max="12" id="s-cada" value="'+settings.recCada+'"></div>';
+  s+='<div class="set-row"><span>Desde</span><input type="time" id="s-desde" value="'+settings.recDesde+'"></div>';
+  s+='<div class="set-row"><span>Hasta</span><input type="time" id="s-hasta" value="'+settings.recHasta+'"></div>';
+  s+='<div class="set-row"><span>Solo de lunes a viernes</span><input type="checkbox" id="s-lab" '+(settings.recLaborables?'checked':'')+'></div>';
   s+='<div class="set-row"><span>Aviso el día de entrega</span><input type="time" id="s-avi" value="'+settings.aviso+'"></div>';
   s+='<div class="set-row"><span>Aviso el día anterior</span><input type="time" id="s-pre" value="'+settings.avisoPrevio+'"></div>';
   s+='<div class="set-row"><span>Alertar si no hay seguimiento en (días)</span><input type="number" min="1" max="30" id="s-seg" value="'+settings.segDias+'"></div>';
@@ -352,7 +378,9 @@ function commit(){
       it.cliente=form.cliente;it.tarea=form.tarea;it.fecha=form.fecha;it.estado=form.estado;it.resultado=form.resultado;
     }
   } else {
-    items.push({id:uid(),cliente:form.cliente,tarea:form.tarea,fecha:form.fecha,estado:form.estado,resultado:form.resultado,creado:now,cerrado:form.estado==='listo'?now:null,historial:[{t:now,tipo:'creado',nota:''}]});
+    var hist=[{t:now,tipo:'creado',nota:''}];
+    if(form._origen==='whatsapp'&&form._raw) hist.push({t:now,tipo:'whatsapp',nota:form._raw.slice(0,600)});
+    items.push({id:uid(),cliente:form.cliente,tarea:form.tarea,fecha:form.fecha,estado:form.estado,resultado:form.resultado,creado:now,cerrado:form.estado==='listo'?now:null,origen:form._origen||null,historial:hist});
   }
   persist(); closeSheet(); toast('Guardado ✓');
 }
@@ -399,7 +427,10 @@ document.addEventListener('click',function(e){
   }
   else if(a==='saveset'){
     settings.notif=document.getElementById('s-notif').checked;
-    settings.resumen=document.getElementById('s-res').value||'07:30';
+    settings.recCada=Math.max(1,Math.min(12,parseInt(document.getElementById('s-cada').value,10)||2));
+    settings.recDesde=document.getElementById('s-desde').value||'08:00';
+    settings.recHasta=document.getElementById('s-hasta').value||'17:00';
+    settings.recLaborables=document.getElementById('s-lab').checked;
     settings.aviso=document.getElementById('s-avi').value||'08:00';
     settings.avisoPrevio=document.getElementById('s-pre').value||'17:00';
     settings.segDias=Math.max(1,Math.min(30,parseInt(document.getElementById('s-seg').value,10)||3));
@@ -421,10 +452,46 @@ document.addEventListener('click',function(e){
 });
 
 // al volver a la app: refrescar tiempos y reprogramar avisos
-document.addEventListener('visibilitychange',function(){if(!document.hidden){if(!sheetMode)render();reschedule();}});
+document.addEventListener('visibilitychange',function(){if(!document.hidden){if(!sheetMode)render();reschedule();consumeShared();}});
 setInterval(function(){if(!sheetMode&&!document.hidden)render()},60000);
 
-loadAll().then(function(){render();return setupNotifications()}).then(function(){render();reschedule()});
+/* ---------- compartir desde WhatsApp ---------- */
+function sinTildes(x){return x.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()}
+function parseShared(raw){
+  var text=String(raw||'').replace(/\r/g,'').trim(), cliente='';
+  var re=/^\[?\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[ap]\.?\s?m\.?)?\]?\s*(?:-\s*)?([^:\n]{1,40}):\s*/i;
+  var lines=text.split('\n').map(function(l){var m=l.match(re);if(m){if(!cliente)cliente=m[1].trim();return l.replace(re,'')}return l});
+  var tarea=lines.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  var t=sinTildes(tarea), base=today(), fecha='', d;
+  var dm=t.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if(/\bpasado\s+manana\b/.test(t)){d=new Date(base);d.setDate(d.getDate()+2);fecha=iso(d)}
+  else if(/\bhoy\b/.test(t)){fecha=iso(base)}
+  else if(/\bmanana\b/.test(t)&&!/\b(en|por|de|esta)\s+la\s+manana\b/.test(t)){d=new Date(base);d.setDate(d.getDate()+1);fecha=iso(d)}
+  else{
+    var dias=['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+    for(var i=0;i<7;i++){if(new RegExp('\\b'+dias[i]+'\\b').test(t)){d=new Date(base);d.setDate(d.getDate()+((i-d.getDay()+7)%7||7));fecha=iso(d);break}}
+    if(!fecha&&dm){var dd=+dm[1],mo=+dm[2],yy=dm[3]?+dm[3]:base.getFullYear();if(yy<100)yy+=2000;
+      if(dd>=1&&dd<=31&&mo>=1&&mo<=12){d=new Date(yy,mo-1,dd);if(!dm[3]&&d<base)d.setFullYear(yy+1);fecha=iso(d)}}
+  }
+  return {cliente:cliente,tarea:tarea.slice(0,500),fecha:fecha,raw:text};
+}
+var Share=null;
+try{ if(isNative&&window.capacitorExports&&capacitorExports.registerPlugin) Share=capacitorExports.registerPlugin('ShareReceiver'); }catch(e){}
+function consumeShared(){
+  if(!Share) return;
+  Share.getShared().then(function(r){
+    if(!r||!r.text) return;
+    var p=parseShared(r.text);
+    form={id:null,cliente:p.cliente,tarea:p.tarea,fecha:p.fecha,estado:'pendiente',resultado:'',_origen:'whatsapp',_raw:p.raw,_focus:p.cliente?'f-tar':'f-cli'};
+    sheetMode='item'; render();
+  }).catch(function(){});
+}
+window.__parseShared=parseShared;
+
+loadAll().then(function(){render();return setupNotifications()}).then(function(){
+  render();reschedule();
+  if(Share){ try{Share.addListener('shared',consumeShared)}catch(e){} consumeShared(); }
+});
 })();
 </script>
 </body>
